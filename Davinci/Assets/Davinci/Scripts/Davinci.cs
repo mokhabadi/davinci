@@ -20,6 +20,7 @@ using UnityEngine.Networking;
 /// </summary>
 public class Davinci : MonoBehaviour
 {
+    private static GameObject componentHolder;
     private static bool ENABLE_GLOBAL_LOGS = true;
 
     private bool enableLog = false;
@@ -56,7 +57,7 @@ public class Davinci : MonoBehaviour
 
     private bool success = false;
 
-    static string filePath = Application.persistentDataPath + "/" +
+    static readonly string filePath = Application.persistentDataPath + "/" +
             "davinci" + "/";
 
 
@@ -65,7 +66,9 @@ public class Davinci : MonoBehaviour
     /// </summary>
     public static Davinci get()
     {
-        return new GameObject("Davinci").AddComponent<Davinci>();
+        if (componentHolder == null)
+            componentHolder = new GameObject("Davinci");
+        return componentHolder.AddComponent<Davinci>();
     }
 
     /// <summary>
@@ -612,7 +615,7 @@ public class Davinci : MonoBehaviour
 
     private void destroyer()
     {
-        Destroy(gameObject);
+        Destroy(this);
     }
 
 
