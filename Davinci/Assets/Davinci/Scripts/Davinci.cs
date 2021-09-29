@@ -20,7 +20,6 @@ public class Davinci : MonoBehaviour
     public static bool staticLog = true;
     static GameObject componentHolder;
     static readonly Dictionary<int, Davinci> underProcessDavincies = new Dictionary<int, Davinci>();
-    static readonly HttpClient httpClient = new HttpClient();
     static readonly string directory = Application.persistentDataPath + "/davinci/";
 
     enum RendererType
@@ -38,10 +37,9 @@ public class Davinci : MonoBehaviour
     string url;
     string filePath;
     float fadeTime = 1;
-    bool logEnabled = false;
+    bool logEnabled = true;
     bool cached = true;
     int uniqueHash;
-    int progress;
 
     UnityAction OnStartAction;
     UnityAction OnDownloadedAction;
@@ -60,7 +58,9 @@ public class Davinci : MonoBehaviour
         if (componentHolder == null)
             componentHolder = new GameObject("Davinci");
 
-        return componentHolder.AddComponent<Davinci>();
+        Davinci davinci = componentHolder.AddComponent<Davinci>();
+        davinci.enabled = false;
+        return davinci;
     }
 
     /// <summary>
@@ -294,6 +294,10 @@ public class Davinci : MonoBehaviour
             underProcessDavincies.Add(uniqueHash, this);
             if (File.Exists(filePath))
                 LoadFile();
+            else if (cached == true)
+                DownloadAndSave();
+            else if (OnDownloadProgressChange != null)
+                DownloadWithProgress();
             else
                 Download();
         }
@@ -367,9 +371,95 @@ public class Davinci : MonoBehaviour
         ImageDataReady(imageData);
     }
 
+    async void DownloadAndSave()
+    {
+        HttpClient httpClient = new HttpClient();
+        FileStream fileStream = null;
+        Stream stream = null;
+        byte[] imageData;
+
+        try
+        {
+            if (Directory.Exists(directory) == false)
+                Directory.CreateDirectory(directory);
+
+            fileStream = new FileStream(filePath, FileMode.Create);
+            HttpResponseMessage response = await httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            int ContentLength = (int)response.Content.Headers.ContentLength.GetValueOrDefault();
+            imageData = new byte[ContentLength];
+            stream = await response.Content.ReadAsStreamAsync();
+            int count = await stream.ReadAsync(imageData, 0, imageData.Length);
+            int head = count;
+            OnDownloadProgressChange?.Invoke(head * 100 / ContentLength);
+
+            while (head < ContentLength)
+            {
+                Task<int> downloadTask = stream.ReadAsync(imageData, head, imageData.Length - head);
+                Task saveTask = fileStream.WriteAsync(imageData, head - count, count);
+                await Task.WhenAll(downloadTask, saveTask);
+                count = downloadTask.Result;
+                head += count;
+                OnDownloadProgressChange?.Invoke(head * 100 / ContentLength);
+            }
+
+            await fileStream.WriteAsync(imageData, head - count, count);
+        }
+        catch (Exception exception)
+        {
+            error("Save file error: " + exception.Message);
+            return;
+        }
+        finally
+        {
+            fileStream?.Dispose();
+            stream?.Dispose();
+        }
+
+        OnDownloadProgressChange?.Invoke(100);
+        OnDownloadedAction?.Invoke();
+        ImageDataReady(imageData);
+    }
+
+    async void DownloadWithProgress()
+    {
+        HttpClient httpClient = new HttpClient();
+        Stream stream = null;
+        byte[] imageData;
+
+        try
+        {
+            HttpResponseMessage response = await httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            int ContentLength = (int)response.Content.Headers.ContentLength.GetValueOrDefault();
+            imageData = new byte[ContentLength];
+            stream = await response.Content.ReadAsStreamAsync();
+            int count;
+            int head = 0;
+
+            while (head < ContentLength)
+            {
+                count = await stream.ReadAsync(imageData, head, imageData.Length - head);
+                head += count;
+                OnDownloadProgressChange?.Invoke(head * 100 / ContentLength);
+            }
+
+        }
+        catch (Exception exception)
+        {
+            error("Save file error: " + exception.Message);
+            return;
+        }
+        finally
+        {
+            stream?.Dispose();
+        }
+
+        OnDownloadedAction?.Invoke();
+        ImageDataReady(imageData);
+    }
 
     async void Download()
     {
+        HttpClient httpClient = new HttpClient();
         byte[] imageData;
 
         try
@@ -383,39 +473,34 @@ public class Davinci : MonoBehaviour
             return;
         }
 
-        if (cached == true)
-            await SaveFile(imageData);
-
         OnDownloadedAction?.Invoke();
         ImageDataReady(imageData);
     }
 
-    async Task SaveFile(byte[] imageData)
-    {
-        FileStream fileStream = null;
+    //async Task SaveFile(byte[] imageData)
+    //{
+    //    FileStream fileStream = null;
 
-        try
-        {
-            if (Directory.Exists(directory) == false)
-                Directory.CreateDirectory(directory);
+    //    try
+    //    {
+    //        if (Directory.Exists(directory) == false)
+    //            Directory.CreateDirectory(directory);
 
-            fileStream = new FileStream(filePath, FileMode.Create);
-            await fileStream.WriteAsync(imageData, 0, imageData.Length);
-        }
-        catch (Exception exception)
-        {
-            error("Save file error: " + exception.Message);
-        }
-        finally
-        {
-            fileStream?.Dispose();
-        }
-    }
+    //        fileStream = new FileStream(filePath, FileMode.Create);
+    //        await fileStream.WriteAsync(imageData, 0, imageData.Length);
+    //    }
+    //    catch (Exception exception)
+    //    {
+    //        error("Save file error: " + exception.Message);
+    //    }
+    //    finally
+    //    {
+    //        fileStream?.Dispose();
+    //    }
+    //}
 
     void ImageDataReady(byte[] imageData)
     {
-        progress = 100;
-        OnDownloadProgressChange?.Invoke(progress);
         Texture2D texture = new Texture2D(2, 2);
         texture.LoadImage(imageData);
         underProcessDavincies.Remove(uniqueHash);
@@ -434,14 +519,9 @@ public class Davinci : MonoBehaviour
                     break;
 
                 renderer.material.mainTexture = texture;
-                float maxAlpha;
 
                 if (fadeTime > 0 && renderer.material.HasProperty("_Color"))
-                {
-                    maxAlpha = renderer.material.color.a;
-                    await Tween(x => { Color color = renderer.material.color; color.a = x; renderer.material.color = color; }, 0f, maxAlpha, fadeTime);
-                }
-
+                    await Tween(x => { Color color = renderer.material.color; color.a = x; renderer.material.color = color; }, 0f, renderer.material.color.a, fadeTime);
 
                 break;
 
@@ -455,12 +535,10 @@ public class Davinci : MonoBehaviour
                     new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f));
 
                 image.sprite = sprite;
-                maxAlpha = image.color.a;
 
                 if (fadeTime > 0)
-                {
-                    await Tween(x => { Color color = image.color; color.a = x; image.color = color; }, 0f, maxAlpha, fadeTime);
-                }
+                    await Tween(x => { Color color = image.color; color.a = x; image.color = color; }, 0f, image.color.a, fadeTime);
+
                 break;
 
             case RendererType.sprite:
@@ -473,15 +551,12 @@ public class Davinci : MonoBehaviour
                     new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f));
 
                 spriteRenderer.sprite = spriteImage;
-                maxAlpha = spriteRenderer.color.a;
 
                 if (fadeTime > 0)
-                {
-                    await Tween(x => { Color color = spriteRenderer.color; color.a = x; spriteRenderer.color = color; }, 0f, maxAlpha, fadeTime);
-                }
+                    await Tween(x => { Color color = spriteRenderer.color; color.a = x; spriteRenderer.color = color; }, 0f, spriteRenderer.color.a, fadeTime);
+
                 break;
         }
-
 
         if (logEnabled)
             Debug.Log("[Davinci] Image has been loaded.");
@@ -557,11 +632,6 @@ public class Davinci : MonoBehaviour
         action(from);
         enabled = true;
         await tcs.Task;
-    }
-
-    void Start()
-    {
-        enabled = false;
     }
 
     void Update()
